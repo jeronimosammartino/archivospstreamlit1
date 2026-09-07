@@ -8,7 +8,7 @@ import plotly.graph_objects as go
 st.set_page_config(page_title="Control de Métodos, Costos y HH", layout="wide")
 
 st.title("📊 Control de Métodos: Horas Hombre, Costos y Rendimientos")
-st.write("Tablero integral de control operacional (100% equivalente a Power BI).")
+st.write("Tablero integral de control operacional.")
 
 uploaded_file = st.file_uploader("Sube la matriz del proyecto (.xlsx)", type=["xlsx", "xls"])
 
@@ -313,8 +313,8 @@ if uploaded_file:
         
         cr1, cr2, cr3 = st.columns(3)
         d_eo = rend_est - rend_ofe
-        cr1.metric("REND ESTIMADO VS OFERTADO", f"{d_eo:.2f}", f"{(d_eo/rend_ofe*100):.2f}% (%V E-O)" if rend_ofe else "0%")
+        cr1.metric("REND ESTIMADO VS OFERTADO", f"{d_eo:.2f}", f"{(d_eo/rend_ofe*100):.2f}%" if rend_ofe else "0%")
         d_re = rend_real - rend_est
-        cr2.metric("REND REAL VS ESTIM", f"{d_re:.2f}", f"{(d_re/rend_est*100):.2f}% (%V R-E)" if rend_est else "0%")
+        cr2.metric("REND REAL VS ESTIM", f"{d_re:.2f}", f"{(d_re/rend_est*100):.2f}%" if rend_est else "0%")
         d_ro = rend_real - rend_ofe
-        cr3.metric("REND REAL VS OFERTADO", f"{d_ro:.2f}", f"{(d_ro/rend_ofe*100):.2f}% (%V R-O)" if rend_ofe else "0%")
+        cr3.metric("REND REAL VS OFERTADO", f"{d_ro:.2f}", f"{(d_ro/rend_ofe*100):.2f}%" if rend_ofe else "0%")
