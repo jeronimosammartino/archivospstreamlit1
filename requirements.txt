@@ -4,3 +4,4 @@ openpyxl
 python-pptx
 reportlab
 plotly
+matplotlib
