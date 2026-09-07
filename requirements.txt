@@ -3,4 +3,4 @@ pandas
 openpyxl
 python-pptx
 reportlab
-openai
+plotly
