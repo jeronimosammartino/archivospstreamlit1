@@ -4,8 +4,6 @@ import pandas as pd
 import openpyxl
 import plotly.express as px
 import plotly.graph_objects as go
-from pptx import Presentation
-from pptx.util import Inches
 
 st.set_page_config(page_title="Dashboard Interactivo de Horas Hombre", layout="wide")
 
@@ -185,82 +183,4 @@ if uploaded_file:
             totals={"marker": {"color": "#06B6D4"}}
         ))
         fig_waterfall.update_layout(height=450, xaxis_tickangle=-45, yaxis_title="Diferencia HH (Real - Oferta)")
-        st.plotly_chart(fig_waterfall, use_container_width=True)    
-    # Variaciones
-    var_est_ofe = tot_est - tot_ofe
-    pct_est_ofe = (var_est_ofe / tot_ofe * 100) if tot_ofe else 0
-    
-    var_real_est = tot_real - tot_est
-    pct_real_est = (var_real_est / tot_est * 100) if tot_est else 0
-    
-    var_real_ofe = tot_real - tot_ofe
-    pct_real_ofe = (var_real_ofe / tot_ofe * 100) if tot_ofe else 0
-    
-    # Desvíos por tarea (Real vs Oferta)
-    s_ofe = fila_ofe[cols_hh].iloc[0] if not fila_ofe.empty else pd.Series()
-    s_real = fila_real[cols_hh].iloc[0] if not fila_real.empty else pd.Series()
-    desvios_tarea = (s_real - s_ofe).sort_values(ascending=False)
-    
-    return {
-        "ofe": tot_ofe, "est": tot_est, "real": tot_real,
-        "var_est_ofe": var_est_ofe, "pct_est_ofe": pct_est_ofe,
-        "var_real_est": var_real_est, "pct_real_est": pct_real_est,
-        "var_real_ofe": var_real_ofe, "pct_real_ofe": pct_real_ofe,
-        "desvios_tarea": desvios_tarea
-    }
-
-def generar_pptx(m):
-    prs = Presentation()
-    slide = prs.slides.add_slide(prs.slide_layouts[0])
-    slide.shapes.title.text = "Informe de Desvíos de Horas Hombre"
-    slide.placeholders[1].text = f"Variación Total: +{m['var_real_ofe']:,} HH ({m['pct_real_ofe']:.2f}%)\nIMPSA - Métodos"
-    
-    # Diapositiva de KPIs
-    slide2 = prs.slides.add_slide(prs.slide_layouts[5])
-    slide2.shapes.title.text = "Métricas Globales de Horas Hombre"
-    
-    tb = slide2.shapes.add_textbox(Inches(1), Inches(2), Inches(8), Inches(4))
-    tf = tb.text_frame
-    tf.word_wrap = True
-    tf.text = f"• Total Ofertadas: {m['ofe']:,} HH\n• Total Estimadas (HdR): {m['est']:,} HH\n• Total Reales: {m['real']:,} HH\n\n"
-    tf.text += f"1. Estimado vs Ofertado: +{m['var_est_ofe']:,} HH (+{m['pct_est_ofe']:.2f}%)\n"
-    tf.text += f"2. Real vs Estimado: +{m['var_real_est']:,} HH (+{m['pct_real_est']:.2f}%)\n"
-    tf.text += f"3. Real vs Ofertado: +{m['var_real_ofe']:,} HH (+{m['pct_real_ofe']:.2f}%)\n\n"
-    tf.text += f"Top Puestos Críticos con Mayor Sobrecosto:\n"
-    for tarea, val in m['desvios_tarea'].head(5).items():
-        tf.text += f"  - {tarea}: +{val:,} HH\n"
-        
-    out = io.BytesIO()
-    prs.save(out)
-    out.seek(0)
-    return out
-
-if uploaded_file:
-    file_bytes = io.BytesIO(uploaded_file.read())
-    wb_check = openpyxl.load_workbook(file_bytes, read_only=True)
-    hojas = wb_check.sheetnames
-    wb_check.close()
-    
-    hoja = st.selectbox("Hoja a procesar:", hojas, index=1 if len(hojas) > 1 else 0)
-    file_bytes.seek(0)
-    df = leer_matriz_exacta(file_bytes, hoja)
-    
-    st.subheader(f"Vista de '{hoja}'")
-    st.dataframe(df, height=350)
-    
-    m = calcular_metricas(df)
-    
-    st.markdown("---")
-    st.subheader("Indicadores Clave de Desvío (Idéntico a Power BI)")
-    
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Variación Estimado vs Ofertado", f"{m['var_est_ofe']:,} HH", f"{m['pct_est_ofe']:.2f}%")
-    c2.metric("Variación Real vs Estimado", f"{m['var_real_est']:,} HH", f"{m['pct_real_est']:.2f}%")
-    c3.metric("Variación Real vs Ofertado", f"{m['var_real_ofe']:,} HH", f"{m['pct_real_ofe']:.2f}%")
-    
-    st.markdown("---")
-    st.write("### Top Desvíos por Tarea (Sobrecostos)")
-    st.dataframe(m['desvios_tarea'].head(8).to_frame(name="Diferencia HH (Real - Oferta)"))
-    
-    pptx_data = generar_pptx(m)
-    st.download_button("📥 Descargar Presentación (.pptx)", pptx_data, "Reporte_Horas_Hombre.pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation")
+        st.plotly_chart(fig_waterfall, use_container_width=True)
