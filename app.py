@@ -50,8 +50,7 @@ def crear_powerpoint(df_resumen, analisis_ia):
     slide_layout = prs.slide_layouts[0] # Título y subtítulo
     slide = prs.slides.add_slide(slide_layout)
     slide.shapes.title.text = "Informe Ejecutivo de Resultados"
-    slide.placeholders[1].text = "Generado automáticamente vía Streamlit
-Confidencial"
+slide.placeholders[1].text = "Generado automáticamente vía Streamlit\\nConfidencial"
     
     # Diapositiva 2: Resumen Cuantitativo
     slide_layout = prs.slide_layouts[5] # Solo título
