@@ -2,18 +2,15 @@ import io
 import streamlit as st
 import pandas as pd
 import openpyxl
+import plotly.express as px
+import plotly.graph_objects as go
 from pptx import Presentation
-from pptx.util import Inches, Pt
-from pptx.dml.color import RGBColor
-from reportlab.lib.pagesizes import letter, landscape
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib import colors
+from pptx.util import Inches
 
-st.set_page_config(page_title="Control de HH - Métodos", layout="wide")
+st.set_page_config(page_title="Dashboard Interactivo de Horas Hombre", layout="wide")
 
-st.title("📊 Control de Horas Hombre (HH): Métodos y Operaciones")
-st.write("Generador de balances y reportes ejecutivos (Oferta vs Estimado vs Real).")
+st.title("📊 Control y Balances de Horas Hombre (HH)")
+st.write("Panel interactivo de control: Oferta vs Estimado (HdR) vs Real con filtros dinámicos.")
 
 uploaded_file = st.file_uploader("Sube la matriz del proyecto (.xlsx)", type=["xlsx", "xls"])
 
@@ -21,7 +18,6 @@ def leer_matriz_exacta(file_bytes, sheet_name):
     wb = openpyxl.load_workbook(file_bytes, data_only=True)
     ws = wb[sheet_name]
     
-    # Resolver celdas combinadas
     for mr in list(ws.merged_cells.ranges):
         val = ws.cell(row=mr.min_row, column=mr.min_col).value
         ws.unmerge_cells(range_string=str(mr))
@@ -47,19 +43,149 @@ def leer_matriz_exacta(file_bytes, sheet_name):
         df["Categoria"] = df["Categoria"].ffill()
     return df
 
-def calcular_metricas(df):
-    cols_hh = [c for c in df.columns if c.startswith("HH ") or c in ["Autycontrol", "MET"]]
+def transformar_a_base_larga(df):
+    cols_recurso = [c for c in df.columns if c.startswith("HH ") or c in ["Autycontrol", "MET"]]
+    df_detalle = df[~df['GDF'].astype(str).str.contains("Total", case=False, na=False)].copy()
     
-    # 1. Totales Generales
-    fila_ofe = df[df['Categoria'].astype(str).str.contains("Total Oferta", case=False, na=False)]
-    fila_est = df[df['Categoria'].astype(str).str.contains("Total Estimado", case=False, na=False) & 
-                  ~df['Categoria'].astype(str).str.contains("OF", case=False, na=False)]
-    fila_real = df[df['Categoria'].astype(str).str.contains("Total Proyecto", case=False, na=False)]
+    def normalizar_cat(val):
+        v = str(val).upper()
+        if "OFERTA" in v:
+            return "OFERTADAS"
+        elif "HDR" in v:
+            return "ESTIMADAS"
+        elif "REAL" in v:
+            return "REALES"
+        return None
+
+    df_detalle['Estado'] = df_detalle['Categoria'].apply(normalizar_cat)
+    df_detalle = df_detalle.dropna(subset=['Estado'])
     
-    tot_ofe = fila_ofe[cols_hh].sum(axis=1).values[0] if not fila_ofe.empty else 0
-    tot_est = fila_est[cols_hh].sum(axis=1).values[0] if not fila_est.empty else 0
-    tot_real = fila_real[cols_hh].sum(axis=1).values[0] if not fila_real.empty else 0
+    df_long = df_detalle.melt(
+        id_vars=['Estado', 'GDF'],
+        value_vars=cols_recurso,
+        var_name='Recurso',
+        value_name='Horas'
+    )
+    df_long['Horas'] = pd.to_numeric(df_long['Horas'], errors='coerce').fillna(0)
+    return df_long
+
+if uploaded_file:
+    file_bytes = io.BytesIO(uploaded_file.read())
+    wb_check = openpyxl.load_workbook(file_bytes, read_only=True)
+    hojas = wb_check.sheetnames
+    wb_check.close()
     
+    hoja = st.sidebar.selectbox("Hoja activa:", hojas, index=1 if len(hojas) > 1 else 0)
+    file_bytes.seek(0)
+    df_raw = leer_matriz_exacta(file_bytes, hoja)
+    
+    df_long = transformar_a_base_larga(df_raw)
+    
+    # --- FILTROS INTERACTIVOS ---
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("🔍 Filtros Dinámicos")
+    
+    lista_recursos = sorted(df_long['Recurso'].unique().tolist())
+    filtro_recurso = st.sidebar.multiselect("Filtrar por RECURSO / TAREA:", options=lista_recursos, default=[])
+    
+    lista_gdf = sorted(df_long['GDF'].dropna().unique().tolist())
+    filtro_gdf = st.sidebar.multiselect("Filtrar por GDF (Subconjunto):", options=lista_gdf, default=[])
+    
+    df_filtrado = df_long.copy()
+    if filtro_recurso:
+        df_filtrado = df_filtrado[df_filtrado['Recurso'].isin(filtro_recurso)]
+    if filtro_gdf:
+        df_filtrado = df_filtrado[df_filtrado['GDF'].isin(filtro_gdf)]
+        
+    # --- KPIS ---
+    totales_estado = df_filtrado.groupby('Estado')['Horas'].sum().to_dict()
+    tot_ofe = totales_estado.get("OFERTADAS", 0)
+    tot_est = totales_estado.get("ESTIMADAS", 0)
+    tot_real = totales_estado.get("REALES", 0)
+    
+    var_est_ofe = tot_est - tot_ofe
+    pct_est_ofe = (var_est_ofe / tot_ofe * 100) if tot_ofe else 0
+    
+    var_real_est = tot_real - tot_est
+    pct_real_est = (var_real_est / tot_est * 100) if tot_est else 0
+    
+    var_real_ofe = tot_real - tot_ofe
+    pct_real_ofe = (var_real_ofe / tot_ofe * 100) if tot_ofe else 0
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("VARIACIÓN HH ESTIMADO VS OFERTADO", f"{int(var_est_ofe):,} HH", f"{pct_est_ofe:.2f}%")
+    c2.metric("VARIACIÓN HH REAL VS ESTIMADO", f"{int(var_real_est):,} HH", f"{pct_real_est:.2f}%")
+    c3.metric("VARIACIÓN HH REALES VS OFERTADAS", f"{int(var_real_ofe):,} HH", f"{pct_real_ofe:.2f}%")
+    
+    st.markdown("---")
+    
+    # --- GRÁFICOS INTERACTIVOS ---
+    color_map = {
+        "OFERTADAS": "#F59E0B",
+        "ESTIMADAS": "#06B6D4",
+        "REALES": "#6366F1"
+    }
+    orden_estados = ["OFERTADAS", "ESTIMADAS", "REALES"]
+
+    st.subheader("📊 Comparativa Global de Horas")
+    df_tot_plot = pd.DataFrame({
+        "Estado": orden_estados,
+        "Horas": [tot_ofe, tot_est, tot_real]
+    })
+    fig_global = px.bar(
+        df_tot_plot, x="Estado", y="Horas", color="Estado",
+        text_auto=",.0f",
+        color_discrete_map=color_map,
+        title="Total de Horas Hombre por Estado"
+    )
+    fig_global.update_layout(height=380, showlegend=False, xaxis_title="", yaxis_title="Horas Hombre (HH)")
+    st.plotly_chart(fig_global, use_container_width=True)
+    
+    col_g1, col_g2 = st.columns(2)
+    
+    with col_g1:
+        st.subheader("📌 Horas por Tarea")
+        df_tarea = df_filtrado.groupby(['Recurso', 'Estado'])['Horas'].sum().reset_index()
+        fig_tarea = px.bar(
+            df_tarea, x="Recurso", y="Horas", color="Estado",
+            barmode="group",
+            category_orders={"Estado": orden_estados},
+            color_discrete_map=color_map
+        )
+        fig_tarea.update_layout(height=450, xaxis_tickangle=-45, yaxis_title="HH", legend_title="")
+        st.plotly_chart(fig_tarea, use_container_width=True)
+        
+    with col_g2:
+        st.subheader("🏭 Horas por GDF (Subconjunto)")
+        df_gdf = df_filtrado.groupby(['GDF', 'Estado'])['Horas'].sum().reset_index()
+        fig_gdf = px.bar(
+            df_gdf, x="GDF", y="Horas", color="Estado",
+            barmode="group",
+            category_orders={"Estado": orden_estados},
+            color_discrete_map=color_map
+        )
+        fig_gdf.update_layout(height=450, yaxis_title="HH", legend_title="")
+        st.plotly_chart(fig_gdf, use_container_width=True)
+        
+    st.subheader("🌊 Variación de Horas (Cascada por Tarea: Real vs Oferta)")
+    df_pivot_tarea = df_filtrado.pivot_table(index='Recurso', columns='Estado', values='Horas', aggfunc='sum').fillna(0)
+    if 'OFERTADAS' in df_pivot_tarea.columns and 'REALES' in df_pivot_tarea.columns:
+        df_pivot_tarea['Desvío'] = df_pivot_tarea['REALES'] - df_pivot_tarea['OFERTADAS']
+        df_desv = df_pivot_tarea.sort_values(by='Desvío', ascending=False).reset_index()
+        
+        fig_waterfall = go.Figure(go.Waterfall(
+            name="Desvío",
+            orientation="v",
+            measure=["relative"] * len(df_desv) + ["total"],
+            x=df_desv['Recurso'].tolist() + ["Total"],
+            y=df_desv['Desvío'].tolist() + [df_desv['Desvío'].sum()],
+            textposition="outside",
+            decreasing={"marker": {"color": "#10B981"}},
+            increasing={"marker": {"color": "#EF4444"}},
+            totals={"marker": {"color": "#06B6D4"}}
+        ))
+        fig_waterfall.update_layout(height=450, xaxis_tickangle=-45, yaxis_title="Diferencia HH (Real - Oferta)")
+        st.plotly_chart(fig_waterfall, use_container_width=True)    
     # Variaciones
     var_est_ofe = tot_est - tot_ofe
     pct_est_ofe = (var_est_ofe / tot_ofe * 100) if tot_ofe else 0
