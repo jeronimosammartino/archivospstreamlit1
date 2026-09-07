@@ -1,6 +1,7 @@
 import io
 import streamlit as st
 import pandas as pd
+import openpyxl
 from pptx import Presentation
 from pptx.util import Inches, Pt
 from reportlab.lib.pagesizes import letter, landscape
@@ -9,124 +10,146 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 import openai
 
-st.set_page_config(page_title="Generador de Reportes de Métodos y Costos", layout="wide")
+st.set_page_config(page_title="Control de Métodos y Proyectos", layout="wide")
 
-st.title("📊 Generador de Reportes Industriales y Métodos")
-st.write("Carga de presupuestos, matrices de horas hombre (HH) y balances de proyecto.")
+st.title("📊 Control de Métodos, HH y Costos de Proyecto")
+st.write("Herramienta de análisis y generación de reportes ejecutivos para matrices de ingeniería y presupuestos.")
 
-# Configuración en barra lateral
-api_key = st.sidebar.text_input("OpenAI API Key", type="password", help="Tu API Key no se almacena.")
+# Barra lateral
+api_key = st.sidebar.text_input("OpenAI API Key", type="password", help="Tu API Key se usa únicamente en tu sesión.")
 st.sidebar.markdown("---")
 
-uploaded_file = st.file_uploader("Arrastra tu archivo Excel aquí", type=["xlsx", "xls"])
+uploaded_file = st.file_uploader("Sube tu archivo Excel (.xlsx)", type=["xlsx", "xls"])
 
-def limpiar_matriz_industrial(df_raw):
+def leer_matriz_exacta(file_bytes, sheet_name):
     """
-    Detecta automáticamente la fila de encabezados reales y resuelve celdas combinadas.
+    Lee la hoja desenrollando celdas combinadas y preservando todas las filas y columnas.
     """
-    header_idx = None
-    for idx in range(min(10, len(df_raw))):
-        row_vals = [str(v) for v in df_raw.iloc[idx].values if pd.notna(v)]
-        row_str = " ".join(row_vals)
-        if any(k in row_str for k in ["Peso", "HH", "RECURSO", "GDF", "Oferta", "Subconjunto"]):
+    wb = openpyxl.load_workbook(file_bytes, data_only=True)
+    ws = wb[sheet_name]
+    
+    # 1. Propagar valores de celdas combinadas a todas las celdas del bloque
+    merged_ranges = list(ws.merged_cells.ranges)
+    for mr in merged_ranges:
+        val = ws.cell(row=mr.min_row, column=mr.min_col).value
+        ws.unmerge_cells(range_string=str(mr))
+        for r in range(mr.min_row, mr.max_row + 1):
+            for c in range(mr.min_col, mr.max_col + 1):
+                ws.cell(row=r, column=c).value = val
+                
+    # 2. Extraer datos fila por fila
+    filas = list(ws.iter_rows(values_only=True))
+    if not filas:
+        return pd.DataFrame()
+        
+    # 3. Detectar fila de encabezados
+    header_idx = 0
+    for idx, row in enumerate(filas[:10]):
+        textos = [str(c).strip().upper() for c in row if c is not None]
+        if any("CATEGORIA" in t or "GDF" in t or "PESO" in t for t in textos):
             header_idx = idx
             break
             
-    if header_idx is not None:
-        df = df_raw.iloc[header_idx + 1:].copy()
-        df.columns = df_raw.iloc[header_idx].values
-    else:
-        df = df_raw.copy()
-
-    df.columns = [str(c).strip().replace("\n", " ") if (pd.notna(c) and str(c).strip() != "") else f"Col_{i}" for i, c in enumerate(df.columns)]
+    headers = [str(c).strip().replace("\n", " ") if c is not None else f"Col_{i}" for i, c in enumerate(filas[header_idx])]
     
-    df = df.dropna(how='all', axis=1)
-    df = df.dropna(how='all', axis=0)
-
-    for col in df.columns[:3]:
-        df[col] = df[col].ffill()
+    datos = filas[header_idx + 1:]
+    df = pd.DataFrame(datos, columns=headers)
+    
+    # Eliminar únicamente filas que sean 100% None
+    df = df.dropna(how="all").reset_index(drop=True)
+    
+    # Asegurar que la columna de Categoría quede poblada
+    if "Categoria" in df.columns:
+        df["Categoria"] = df["Categoria"].ffill()
         
     return df
 
-def analizar_con_ia(contexto_proyecto, key):
+def analizar_con_ia(df, key):
     client = openai.OpenAI(api_key=key)
+    
+    # Extraer las filas de totales clave
+    df_totales = df[df.apply(lambda r: r.astype(str).str.contains("Total", case=False).any(), axis=1)]
+    resumen_totales = df_totales.to_string() if not df_totales.empty else df.to_string()
+    
     prompt = f"""
-    Eres un ingeniero experto en Métodos, Procesos Industriales y Costos Operativos.
-    Analiza la matriz de horas hombre (HH) y pesos del proyecto:
+    Eres el Ingeniero Jefe de Métodos, Procesos y Costos Industriales.
+    Analiza la siguiente matriz consolidada de horas hombre (HH) y pesos del proyecto:
     
-    {contexto_proyecto}
+    {resumen_totales}
     
-    Genera un informe gerencial estructurado estrictamente en:
-    1. Resumen Ejecutivo (Visión general del estado del proyecto: desvíos generales entre Oferta, Estimado y Real).
-    2. Análisis de Desvíos de Recursos Críticos (Compara las principales horas hombre: Estructura, Soldadura, Mecanizado/Tornos, QA-QC, etc.).
-    3. Análisis de Pesos (Oferta vs Fabricación).
-    4. Conclusiones y Alertas Operativas (Puntos de atención para el responsable de Métodos / Operaciones).
+    DETALLE POR SUBCONJUNTO:
+    {df[['Categoria', 'GDF', 'Peso', 'HH ESTRUCTURA', 'HH SOLDADURA', 'HH QA-QC']].to_string()}
+    
+    Genera un informe gerencial cuantitativo y riguroso estructurado en:
+    1. Diagnóstico Ejecutivo: Variación global entre Oferta, Estimado de HdR, Estimado de OF y Real Total (destaca desvío total de peso y HH).
+    2. Puestos Críticos y Sobrecostos: Disciplinas con mayor desvío (Estructura, Soldadura, Pintura, Mecanizado pesado/tornos, etc.).
+    3. Productividad (Horas / Tonelada): Evolución del ratio HH/Tn entre lo ofertado y lo real ejecutado.
+    4. Conclusiones y Plan de Acción Operativo.
     """
     response = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": prompt}],
         temperature=0.2,
-        max_tokens=800
+        max_tokens=850
     )
     return response.choices[0].message.content
 
-def crear_powerpoint(dict_dfs, analisis_ia):
+def crear_powerpoint(df, analisis_ia):
     prs = Presentation()
     
-    # Portada
+    # Slide 1: Portada
     slide = prs.slides.add_slide(prs.slide_layouts[0])
-    slide.shapes.title.text = "Informe Ejecutivo de Desvíos y Métodos"
-    slide.placeholders[1].text = "Control de Horas Hombre (HH) y Pesos de Proyecto\nConfidencial"
+    slide.shapes.title.text = "Balance de Horas Hombre y Métodos"
+    slide.placeholders[1].text = "Control de Desvíos: Oferta vs Estimado vs Real\nConfidencial"
     
-    # Diagnóstico IA
+    # Slide 2: Conclusiones IA
     slide = prs.slides.add_slide(prs.slide_layouts[5])
     slide.shapes.title.text = "Diagnóstico Estratégico y Desvíos"
-    tx_box = slide.shapes.add_textbox(Inches(0.6), Inches(1.3), Inches(8.8), Inches(5.5))
+    tx_box = slide.shapes.add_textbox(Inches(0.6), Inches(1.2), Inches(8.8), Inches(5.6))
     tf = tx_box.text_frame
     tf.word_wrap = True
     tf.text = analisis_ia
     
-    # Diapositivas por hoja
-    for sheet_name, df_sheet in list(dict_dfs.items())[:3]:
+    # Slide 3: Matriz Comparativa de Totales
+    df_totales = df[df.apply(lambda r: r.astype(str).str.contains("Total", case=False).any(), axis=1)]
+    if not df_totales.empty:
         slide = prs.slides.add_slide(prs.slide_layouts[5])
-        slide.shapes.title.text = f"Matriz: {sheet_name}"
+        slide.shapes.title.text = "Comparativa de Totales (Oferta vs Estimados vs Real)"
         
-        df_display = df_sheet.head(7)
-        if not df_display.empty:
-            cols_to_show = min(len(df_display.columns), 7)
-            rows = len(df_display) + 1
-            table_shape = slide.shapes.add_table(rows, cols_to_show, Inches(0.5), Inches(1.5), Inches(9.0), Inches(4.5))
-            table = table_shape.table
+        cols_clave = [c for c in ['Categoria', 'Peso', 'HH ESTRUCTURA', 'HH SOLDADURA', 'HH AJUSTE', 'HH PINTURA', 'HH QA-QC'] if c in df.columns]
+        df_sub = df_totales[cols_clave]
+        
+        rows, cols = len(df_sub) + 1, len(cols_clave)
+        table_shape = slide.shapes.add_table(rows, cols, Inches(0.5), Inches(1.8), Inches(9.0), Inches(3.8))
+        table = table_shape.table
+        
+        for i, col_name in enumerate(cols_clave):
+            table.cell(0, i).text = str(col_name)
             
-            for i, col_name in enumerate(df_display.columns[:cols_to_show]):
-                cell = table.cell(0, i)
-                cell.text = str(col_name)[:15]
+        for row_idx, (_, row) in enumerate(df_sub.iterrows()):
+            for col_idx, col_name in enumerate(cols_clave):
+                val = row[col_name]
+                table.cell(row_idx + 1, col_idx).text = str(val) if pd.notna(val) else "-"
                 
-            for row_idx, (_, row) in enumerate(df_display.iterrows()):
-                for col_idx in range(cols_to_show):
-                    cell = table.cell(row_idx + 1, col_idx)
-                    val = row.iloc[col_idx]
-                    cell.text = str(round(val, 1)) if isinstance(val, (int, float)) and pd.notna(val) else (str(val) if pd.notna(val) else "-")
-                    
     pptx_io = io.BytesIO()
     prs.save(pptx_io)
     pptx_io.seek(0)
     return pptx_io
 
-def crear_pdf(dict_dfs, analisis_ia):
+def crear_pdf(df, analisis_ia):
     pdf_io = io.BytesIO()
-    doc = SimpleDocTemplate(pdf_io, pagesize=landscape(letter), rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
+    doc = SimpleDocTemplate(pdf_io, pagesize=landscape(letter), rightMargin=25, leftMargin=25, topMargin=25, bottomMargin=25)
     styles = getSampleStyleSheet()
     
-    title_style = ParagraphStyle(name='TitleStyle', parent=styles['Heading1'], fontSize=15, textColor=colors.HexColor('#0F172A'))
+    title_style = ParagraphStyle(name='TitleStyle', parent=styles['Heading1'], fontSize=14, textColor=colors.HexColor('#0F172A'))
     h2_style = ParagraphStyle(name='H2Style', parent=styles['Heading2'], fontSize=11, textColor=colors.HexColor('#1E40AF'))
     body_style = ParagraphStyle(name='BodyStyle', parent=styles['Normal'], fontSize=8.5, leading=12)
     
     story = []
-    story.append(Paragraph("Informe Gerencial de Métodos, HH y Costos de Fabricación", title_style))
+    story.append(Paragraph("Informe Gerencial de Desvíos de Métodos y Horas Hombre", title_style))
     story.append(Spacer(1, 8))
     
-    story.append(Paragraph("1. Análisis Técnico y Desvíos", h2_style))
+    story.append(Paragraph("1. Evaluación y Dictamen Técnico", h2_style))
     story.append(Spacer(1, 4))
     for parrafo in analisis_ia.split("\n"):
         if parrafo.strip():
@@ -134,33 +157,26 @@ def crear_pdf(dict_dfs, analisis_ia):
             story.append(Spacer(1, 2))
     story.append(Spacer(1, 10))
     
-    for sheet_name, df_sheet in list(dict_dfs.items())[:2]:
-        story.append(Paragraph(f"Resumen de Matriz: {sheet_name}", h2_style))
+    df_totales = df[df.apply(lambda r: r.astype(str).str.contains("Total", case=False).any(), axis=1)]
+    if not df_totales.empty:
+        story.append(Paragraph("2. Resumen Comparativo de Bloques y Totales", h2_style))
         story.append(Spacer(1, 4))
         
-        cols_to_use = [c for c in df_sheet.columns if not c.startswith("Col_")][:8]
-        if not cols_to_use:
-            cols_to_use = df_sheet.columns[:8].tolist()
-            
-        df_sub = df_sheet[cols_to_use].head(8)
-        tabla_data = [cols_to_use]
-        for _, row in df_sub.iterrows():
-            fila = []
-            for val in row:
-                fila.append(str(round(val, 1)) if isinstance(val, (int, float)) and pd.notna(val) else (str(val)[:15] if pd.notna(val) else "-"))
-            tabla_data.append(fila)
+        cols_clave = [c for c in ['Categoria', 'Peso', 'HH ESTRUCTURA', 'HH SOLDADURA', 'HH AJUSTE', 'HH PINTURA', 'HH QA-QC'] if c in df.columns]
+        tabla_data = [cols_clave]
+        for _, row in df_totales[cols_clave].iterrows():
+            tabla_data.append([str(row[c]) if pd.notna(row[c]) else "-" for c in cols_clave])
             
         t = Table(tabla_data)
         t.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#E2E8F0')),
             ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, -1), 7.5),
+            ('FONTSIZE', (0, 0), (-1, -1), 8),
             ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#94A3B8')),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
-            ('TOPPADDING', (0, 0), (-1, -1), 3),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+            ('TOPPADDING', (0, 0), (-1, -1), 4),
         ]))
         story.append(t)
-        story.append(Spacer(1, 8))
         
     doc.build(story)
     pdf_io.seek(0)
@@ -168,64 +184,49 @@ def crear_pdf(dict_dfs, analisis_ia):
 
 if uploaded_file is not None:
     try:
-        excel_file = pd.ExcelFile(uploaded_file)
-        nombres_hojas = excel_file.sheet_names
+        file_bytes = io.BytesIO(uploaded_file.read())
+        wb_check = openpyxl.load_workbook(file_bytes, read_only=True)
+        nombres_hojas = wb_check.sheetnames
+        wb_check.close()
         
-        st.success(f"Archivo cargado. Se detectaron {len(nombres_hojas)} hojas en el libro.")
+        st.success(f"Archivo cargado. Hojas disponibles: {', '.join(nombres_hojas)}")
         
-        hojas_seleccionadas = st.multiselect(
-            "Selecciona qué hojas quieres incluir en el análisis:",
+        hoja_activa = st.selectbox(
+            "Selecciona la hoja a procesar:",
             options=nombres_hojas,
-            default=[nombres_hojas[1]] if len(nombres_hojas) > 1 else [nombres_hojas[0]]
+            index=1 if len(nombres_hojas) > 1 else 0
         )
         
-        if not hojas_seleccionadas:
-            st.warning("Selecciona al menos una hoja para continuar.")
+        file_bytes.seek(0)
+        df_completo = leer_matriz_exacta(file_bytes, hoja_activa)
+        
+        st.subheader(f"Vista Completa de '{hoja_activa}' ({df_completo.shape[0]} filas × {df_completo.shape[1]} columnas)")
+        st.dataframe(df_completo, height=550)
+        
+        if not api_key:
+            st.warning("Ingresa tu OpenAI API Key en la barra lateral para generar el informe y las diapositivas.")
         else:
-            dict_dfs = {}
-            tabs = st.tabs(hojas_seleccionadas)
-            for i, sheet in enumerate(hojas_seleccionadas):
-                df_raw = pd.read_excel(uploaded_file, sheet_name=sheet, header=None)
-                df_limpio = limpiar_matriz_industrial(df_raw)
-                dict_dfs[sheet] = df_limpio
-                
-                with tabs[i]:
-                    st.write(f"**Vista previa limpia de {sheet}** ({len(df_limpio)} filas detectadas)")
-                    st.dataframe(df_limpio.head(12))
-            
-            if not api_key:
-                st.warning("Ingresa tu OpenAI API Key en la barra lateral para habilitar la generación.")
-            else:
-                if st.button("🚀 Generar Informe de Proyecto (.pptx y .pdf)"):
-                    with st.spinner("Analizando desvíos de HH, pesos y generando entregables..."):
-                        contexto = ""
-                        for s_name, s_df in dict_dfs.items():
-                            contexto += f"\n=== MATRIZ: {s_name} ===\n"
-                            filas_totales = s_df[s_df.apply(lambda r: r.astype(str).str.contains("Total|OFERTADO|REAL|ESTIMADO", case=False).any(), axis=1)]
-                            if not filas_totales.empty:
-                                contexto += f"Resumen de Totales y Bloques:\n{filas_totales.to_string()}\n"
-                            else:
-                                contexto += f"Datos:\n{s_df.head(10).to_string()}\n"
-                        
-                        analisis = analizar_con_ia(contexto, api_key)
-                        pptx_file = crear_powerpoint(dict_dfs, analisis)
-                        pdf_file = crear_pdf(dict_dfs, analisis)
-                        
-                        st.success("¡Informe y presentación generados exitosamente!")
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            st.download_button(
-                                label="📥 Descargar Presentación (.pptx)",
-                                data=pptx_file,
-                                file_name="Informe_Metodos_HH.pptx",
-                                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation"
-                            )
-                        with col2:
-                            st.download_button(
-                                label="📥 Descargar Reporte en PDF (Horizontal)",
-                                data=pdf_file,
-                                file_name="Informe_Metodos_HH.pdf",
-                                mime="application/pdf"
-                            )
+            if st.button("🚀 Generar Informe y Presentación"):
+                with st.spinner("Generando diagnóstico con IA y compilando archivos..."):
+                    analisis = analizar_con_ia(df_completo, api_key)
+                    pptx_file = crear_powerpoint(df_completo, analisis)
+                    pdf_file = crear_pdf(df_completo, analisis)
+                    
+                    st.success("¡Informe generado con éxito!")
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.download_button(
+                            label="📥 Descargar PowerPoint (.pptx)",
+                            data=pptx_file,
+                            file_name=f"Informe_{hoja_activa}.pptx",
+                            mime="application/vnd.openxmlformats-officedocument.presentationml.presentation"
+                        )
+                    with col2:
+                        st.download_button(
+                            label="📥 Descargar PDF (Horizontal)",
+                            data=pdf_file,
+                            file_name=f"Informe_{hoja_activa}.pdf",
+                            mime="application/pdf"
+                        )
     except Exception as e:
-        st.error(f"Error al procesar las matrices del Excel: {e}")
+        st.error(f"Error procesando la matriz: {e}")
