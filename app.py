@@ -9,16 +9,37 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
+import streamlit as st
+import streamlit.components.v1 as components
 
 from pptx import Presentation
 from pptx.util import Inches, Pt
 from pptx.dml.color import RGBColor
 from pptx.enum.shapes import MSO_SHAPE
 
-// "Hecho por Jeronimo Sammartino, con ayuda de Gemini"//
-
 st.set_page_config(page_title="Control de Métodos, Costos y HH", layout="wide")
+def registrar_firma():
+    if "firma_registrada" not in st.session_state:
+        components.html(
+            """
+            <script>
+                console.log(
+                    "%c Desarrollado por Tu Nombre %c v1.0 ",
+                    "background: #1e1e1e; color: #00ff66; font-size: 13px; font-weight: bold; padding: 4px 6px; border-radius: 4px 0 0 4px;",
+                    "background: #333333; color: #ffffff; font-size: 13px; padding: 4px 6px; border-radius: 0 4px 4px 0;"
+                );
+                console.log(
+                    "%c Contacto: tu_email@dominio.com | GitHub: https://github.com/tu-usuario ",
+                    "color: #888888; font-size: 11px; font-style: italic;"
+                );
+            </script>
+            """,
+            height=0,
+            width=0,
+        )
+        st.session_state["firma_registrada"] = True
 
+registrar_firma()
 st.title("📊 Control de Métodos: Horas, Costos y Rendimientos")
 st.write("Tablero integral de control con exportación completa a PowerPoint.")
 
