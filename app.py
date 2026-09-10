@@ -17,8 +17,8 @@ from pptx.enum.shapes import MSO_SHAPE
 
 st.set_page_config(page_title="Control de Métodos, Costos y HH", layout="wide")
 
-st.title("📊 Control de Métodos: Horas Hombre, Costos y Rendimientos")
-st.write("Tablero integral de control operacional con exportación completa a PowerPoint (1 diapositiva por gráfico).")
+st.title("📊 Control de Métodos: Horas, Costos y Rendimientos")
+st.write("Tablero integral de control con exportación completa a PowerPoint.")
 
 uploaded_file = st.file_uploader("Sube la matriz del proyecto (.xlsx)", type=["xlsx", "xls"])
 
