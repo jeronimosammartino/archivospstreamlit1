@@ -15,6 +15,8 @@ from pptx.util import Inches, Pt
 from pptx.dml.color import RGBColor
 from pptx.enum.shapes import MSO_SHAPE
 
+// "Hecho por Jeronimo Sammartino, con ayuda de Gemini"//
+
 st.set_page_config(page_title="Control de Métodos, Costos y HH", layout="wide")
 
 st.title("📊 Control de Métodos: Horas, Costos y Rendimientos")
